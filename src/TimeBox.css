@@ -1,0 +1,117 @@
+.timebox-container {
+    display: flex;
+    font-family: "Arial", sans-serif;
+    width: 100%;
+    min-height: 100vh;
+    box-sizing: border-box;
+  }
+  
+  /* Left column */
+  .timebox-left {
+    width: 30%;
+    border-right: 1px solid #ccc;
+    padding: 20px;
+    box-sizing: border-box;
+    background-color: #fdfdfd;
+  }
+  
+  .timebox-logo {
+    font-size: 1.4rem;
+    font-weight: bold;
+    margin-bottom: 30px;
+  }
+  
+  .timebox-top-priorities,
+  .timebox-brain-dump {
+    margin-bottom: 30px;
+  }
+  
+  .timebox-label {
+    display: block;
+    font-weight: bold;
+    margin-bottom: 8px;
+  }
+  
+  .timebox-priority-input {
+    display: block;
+    width: 80%;
+    padding: 8px;
+    margin-bottom: 8px;
+    box-sizing: border-box;
+  }
+  
+  .timebox-brain-dump {
+    /* large area for Brain Dump */
+  }
+  
+  .brain-dump-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 8px;
+  }
+  
+  .brain-dump-input {
+    flex: 1;
+    margin-left: 8px;
+    padding: 8px;
+    box-sizing: border-box;
+  }
+  
+  .brain-dump-add-btn,
+  .brain-dump-move-btn {
+    margin-right: 8px;
+    padding: 8px 12px;
+    margin-top: 10px;
+    cursor: pointer;
+  }
+  
+  /* Right column */
+  .timebox-right {
+    flex: 1;
+    padding: 20px;
+    box-sizing: border-box;
+  }
+  
+  .timebox-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+  
+  .timebox-header label {
+    font-weight: bold;
+  }
+  
+  .timebox-schedule table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  
+  .timebox-schedule thead th {
+    text-align: left;
+    border-bottom: 1px solid #ccc;
+    padding-bottom: 8px;
+  }
+  
+  .time-col {
+    width: 80px;
+    padding: 8px;
+    border-right: 1px solid #eee;
+    vertical-align: top;
+  }
+  
+  .task-col {
+    padding: 8px;
+  }
+  
+  .timebox-schedule td {
+    border-bottom: 1px solid #eee;
+  }
+  
+  .timebox-schedule input {
+    width: 95%;
+    padding: 6px;
+    box-sizing: border-box;
+  }
+  
