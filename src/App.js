@@ -1,7 +1,8 @@
 /***************************************
  * App.js (React + Firebase Firestore)
- * Single-file version: all data calls 
- * are done directly in this file.
+ * A single-file version that properly
+ * merges the 'timeBox' without erasing
+ * historical data on each login.
  ***************************************/
 import React, { useState, useEffect } from "react";
 import { Bar, Pie } from "react-chartjs-2";
@@ -21,12 +22,17 @@ import "./App.css";
 
 // 1) Import Firebase & Firestore
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, getDoc, setDoc } from "firebase/firestore";
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc
+  // or updateDoc if you want partial merges
+} from "firebase/firestore";
 
 // 2) Your Firebase config
-//    Replace these strings with your actual config details
 const firebaseConfig = {
-  apiKey: "AIzaSyCR9IO7GQatt5oU33OLxW-vDyEtiZ4Og4I",
+  apiKey: "AIzaSy---YOUR_KEY---",
   authDomain: "my-timebox-project.firebaseapp.com",
   projectId: "my-timebox-project",
   storageBucket: "my-timebox-project.appspot.com",
@@ -44,8 +50,8 @@ const db = getFirestore(app);
 ChartJS.register(BarElement, CategoryScale, LinearScale, Title, Tooltip, Legend, ArcElement);
 
 /** 
- * Your existing Google Sheet URL 
- * (for user info and categories)
+ * Example "public" Google Sheet URL for user info and categories.
+ * If you no longer need to fetch from a sheet, remove these references.
  */
 const GOOGLE_SHEET_URL =
   "https://docs.google.com/spreadsheets/d/e/2PACX-1vS4qcyZ0P11t2tZ6SDAr10nIBP9twgHq2weqhR0kTu47BWox5-nW3_gYF2zplWNDAFa807qASM0D3S5/pubhtml";
@@ -95,7 +101,7 @@ function getQuarterHourSlots(startHour, endHour) {
   return slots;
 }
 
-/** Build hierarchy from ID/name/parentId (for categories) */
+/** Build a hierarchy of categories from ID/name/parentId (for your 'HierarchicalSelect'). */
 function buildHierarchy(rows) {
   const nodeMap = {};
   rows.forEach((r) => {
@@ -154,7 +160,7 @@ async function fetchCategoriesBySheet() {
   return sheetCatsMap;
 }
 
-/** Sync user info from each sheet (like your original code). */
+/** Sync user info from your Google Sheet. */
 async function syncUsersFromSheet() {
   try {
     const res = await fetch(GOOGLE_SHEET_URL);
@@ -171,12 +177,12 @@ async function syncUsersFromSheet() {
         const cells = rows[r].querySelectorAll("td");
         if (cells.length < 2) continue;
 
-        const empNumber = cells[0].textContent.trim();
-        const fullName = cells[1].textContent.trim();
+        const empNumber = cells[0].textContent.trim(); // e.g. "1050028"
+        const fullName = cells[1].textContent.trim();  // e.g. "John Smith"
         if (!fullName) continue;
 
         const username = fullName.toLowerCase();
-        // admin detection
+        // Identify admins
         const adminNumbers = ["1050028", "1163755", "60092284", "1129781"];
         let role = "employee";
         let allowedAreas = [];
@@ -190,22 +196,30 @@ async function syncUsersFromSheet() {
           };
           allowedAreas = adminAllowedAreasMap[empNumber] || [];
         }
+
+        // Only define top-level fields here—NOT an empty `timeBox`
+        // We'll let Firestore merges handle the rest.
         const userObj = {
           role,
-          password: empNumber,
+          password: empNumber, // password is the empNumber
           fullName,
           sheet: sheetName,
-          ...(role === "admin" ? { allowedAreas } : { area: sheetName.toLowerCase() }),
-          timeBox: {},
+          ...(role === "admin"
+            ? { allowedAreas }
+            : { area: sheetName.toLowerCase() }),
+
+          // Provide *defaults* for new users:
           defaultStartHour: 7,
           defaultEndHour: 23,
           defaultPreset: { start: 7, end: 23 },
         };
+
+        // Only save if we haven't seen this user in this run
         if (!syncedUsers[username]) {
           syncedUsers[username] = userObj;
-          saveUserToFirestore(userObj); // ✅ Save to Firestore
+          // If there's no existing doc, this will create it with `merge: true`.
+          saveUserToFirestore(userObj);
         }
-        
       }
     });
     return syncedUsers;
@@ -215,46 +229,90 @@ async function syncUsersFromSheet() {
   }
 }
 
-/** Firestore: load user doc => merges into userObj. */
+/** 
+ * Load the user's doc from Firestore. 
+ * This ensures we get the *existing* timeBox data, if any.
+ */
 async function loadUserFromFirestore(userObj) {
   const key = userObj.fullName.toLowerCase();
   const docRef = doc(db, "users", key);
-  const docSnap = await getDoc(docRef);
-  if (docSnap.exists()) {
-    const data = docSnap.data();
-    // Merge Firestore data into userObj
-    userObj.timeBox = data.timeBox || {};
-    if (typeof data.defaultStartHour === "number") {
-      userObj.defaultStartHour = data.defaultStartHour;
-      userObj.defaultPreset.start = data.defaultStartHour;
+  console.log("Loading from Firestore, doc ID:", key);
+
+  try {
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      const data = docSnap.data();
+      console.log("Firestore doc found for:", key, data);
+
+      // Merge everything from Firestore into userObj
+      Object.assign(userObj, data);
+
+      // Ensure minimal defaults if missing
+      if (!userObj.timeBox) userObj.timeBox = {};
+      if (typeof userObj.defaultStartHour !== "number") {
+        userObj.defaultStartHour = 7;
+        userObj.defaultPreset = { start: 7, end: 23 };
+      }
+      if (typeof userObj.defaultEndHour !== "number") {
+        userObj.defaultEndHour = 23;
+        if (!userObj.defaultPreset) userObj.defaultPreset = {};
+        userObj.defaultPreset.end = 23;
+      }
+    } else {
+      console.warn("No Firestore doc found for:", key);
+      // It's a truly new user if doc doesn't exist
+      if (!userObj.timeBox) userObj.timeBox = {};
     }
-    if (typeof data.defaultEndHour === "number") {
-      userObj.defaultEndHour = data.defaultEndHour;
-      userObj.defaultPreset.end = data.defaultEndHour;
-    }
+  } catch (err) {
+    console.error("Error loading user from Firestore:", err);
   }
   return userObj;
 }
 
+/**
+ * Save the user's data to Firestore in a way that 
+ * does NOT overwrite the entire doc or erase old timeBox days.
+ */
 async function saveUserToFirestore(userObj) {
   if (!userObj?.fullName) {
     console.error("User object is missing fullName!");
     return;
   }
-
   const key = userObj.fullName.toLowerCase();
   const docRef = doc(db, "users", key);
 
   try {
-    await setDoc(docRef, userObj, { merge: true }); // ✅ Merge updates safely
-    console.log(`User ${key} saved to Firestore.`);
+    // 1) Load existing doc so we can preserve older days in timeBox
+    let existingDoc = {};
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      existingDoc = snap.data(); // the doc's current data
+    }
+
+    // 2) Merge existing timeBox with userObj.timeBox
+    // If userObj.timeBox is undefined, treat it as empty
+    const oldTimeBox = existingDoc.timeBox || {};
+    const newTimeBox = userObj.timeBox || {};
+    const mergedTimeBox = { ...oldTimeBox, ...newTimeBox };
+
+    // 3) Now build an object with top-level merges
+    // We'll preserve the other top-level fields from Firestore too.
+    // But anything in userObj (like defaultStartHour) should override the old doc.
+    const finalData = {
+      ...existingDoc,
+      ...userObj,
+      timeBox: mergedTimeBox, // ensure we never lose old days
+    };
+
+    // 4) Write finalData with { merge: true }
+    await setDoc(docRef, finalData, { merge: true });
+    console.log(`User "${key}" saved to Firestore successfully (merge=true).`);
   } catch (error) {
     console.error("Error saving user to Firestore:", error);
   }
 }
 
-
-/** HierarchicalSelect with “Other” always. (Unchanged) */
+/** HierarchicalSelect component for picking categories in nested form. */
 function HierarchicalSelect({ categoryTree, onChange, value, viewMode }) {
   const [selectedPath, setSelectedPath] = useState([]);
   const [otherValue, setOtherValue] = useState("");
@@ -312,7 +370,6 @@ function HierarchicalSelect({ categoryTree, onChange, value, viewMode }) {
       onChange(otherValue);
       return;
     }
-    // recognized category
     const newPath = [...selectedPath.slice(0, level), sel];
     setSelectedPath(newPath);
     setIsOther(false);
@@ -365,7 +422,7 @@ function HierarchicalSelect({ categoryTree, onChange, value, viewMode }) {
   );
 }
 
-/** ScheduleSlot that uses HierarchicalSelect or plain text. (Unchanged) */
+/** Single schedule slot row with category + repeat options. */
 function ScheduleSlot({ label, scheduleEntry, updateEntry, viewMode, categoryTree }) {
   const [showRepeatOptions, setShowRepeatOptions] = useState(false);
   const repeatVal = scheduleEntry.repeat || "none";
@@ -437,8 +494,11 @@ function ScheduleSlot({ label, scheduleEntry, updateEntry, viewMode, categoryTre
   );
 }
 
-/** 
- * Full-Screen Modal for the 3 large charts. (Unchanged)
+/**
+ * Full-Screen Modal for usage reports:
+ *  - Bar chart for category usage
+ *  - Pie chart for free vs busy
+ *  - Bar chart for home office vs non-home
  */
 function ReportsModal({
   usageMap,
@@ -468,7 +528,13 @@ function ReportsModal({
     const bgColors = labels.map((_, i) => colorPalette[i % colorPalette.length]);
     const data = {
       labels,
-      datasets: [{ label: "Category Usage (hrs)", data: dataVals, backgroundColor: bgColors }],
+      datasets: [
+        {
+          label: "Category Usage (hrs)",
+          data: dataVals,
+          backgroundColor: bgColors,
+        },
+      ],
     };
     return (
       <div
@@ -622,74 +688,75 @@ function ReportsModal({
   );
 }
 
-/** Main App */
+/** Main App Component */
 export default function App() {
-  // The actual user who logs in
+  // Logged-in user (the admin or employee who typed username+password)
   const [loggedInUser, setLoggedInUser] = useState(null);
-  // The user whose agenda is displayed
+  // For admins: the user whose agenda is being viewed
   const [displayUser, setDisplayUser] = useState(null);
 
-  // Basic states
+  // Local caches
   const [syncedUsers, setSyncedUsers] = useState({});
   const [categoriesBySheet, setCategoriesBySheet] = useState({});
   const [categoryTree, setCategoryTree] = useState([]);
 
+  // For login
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
 
+  // Agenda states
   const [currentDate, setCurrentDate] = useState(new Date());
   const currentDateStr = formatDate(currentDate);
 
+  // UI states
   const [showConfetti, setShowConfetti] = useState(false);
 
-  // Admin states
+  // Admin
   const [targetUser, setTargetUser] = useState("");
   const [viewingTarget, setViewingTarget] = useState(false);
   const [viewMode, setViewMode] = useState(false);
 
-  // For the full-screen Reports
+  // Full-screen reports
   const [showReports, setShowReports] = useState(false);
   const [reportRange, setReportRange] = useState("daily");
 
-  // Logged in logic
+  // Determine roles
   const isLoggedIn = !!loggedInUser && loggedInUser.password === password;
   const isAdmin = isLoggedIn && loggedInUser.role === "admin";
   const activeData = viewingTarget && displayUser ? displayUser : loggedInUser;
   const canViewAgenda = !!activeData && isLoggedIn;
 
-  // On mount, load users + categories
+  // On mount, fetch from Google Sheets & store in Firestore (for new users).
   useEffect(() => {
     async function init() {
-      const users = await syncUsersFromSheet();
+      const users = await syncUsersFromSheet(); // merges new users
       setSyncedUsers(users);
+
       const catsMap = await fetchCategoriesBySheet();
       setCategoriesBySheet(catsMap);
     }
     init();
   }, []);
 
-  /** Combine multiple sets of categories if admin. */
-  function mergeCategoryTrees(...arrays) {
-    return arrays.flat();
-  }
+  /** Combine categories for admins or pick single sheet for employees. */
   function pickCategoryTreeForUser(u) {
     if (!u) return [];
     if (u.role === "employee") {
       return categoriesBySheet[u.sheet] || [];
     }
     if (u.role === "admin" && u.allowedAreas) {
-      const relevant = u.allowedAreas.map((s) => categoriesBySheet[s] || []);
-      return mergeCategoryTrees(...relevant);
+      const arrays = u.allowedAreas.map((areaName) => categoriesBySheet[areaName] || []);
+      return arrays.flat();
     }
     return [];
   }
 
-  // Firestore-based load
+  // Load doc from Firestore => merges in old data => set state
   async function loadUserRecord(record, isEmployeeView) {
     try {
       const updatedRecord = await loadUserFromFirestore(record);
-      // set states
+      // For admin or user
       if (!isEmployeeView) {
         setLoggedInUser(updatedRecord);
         setDisplayUser(updatedRecord);
@@ -704,8 +771,9 @@ export default function App() {
       const cats = pickCategoryTreeForUser(updatedRecord);
       setCategoryTree(cats);
 
+      // If typed password doesn't match what's in Firestore, warn
       if (updatedRecord.password !== password && !isEmployeeView) {
-        setMessage("Incorrect password (or blank if new user).");
+        setMessage("Incorrect password (or blank if brand-new user).");
       }
     } catch (err) {
       console.error("Error loading user from Firestore:", err);
@@ -726,43 +794,40 @@ export default function App() {
     }
   }
 
-  // auto-save displayUser to Firestore
+  // Whenever displayUser changes, auto-save to Firestore unless we're in read-only mode
   useEffect(() => {
     if (!displayUser) return;
     if (viewMode) return; // read-only => skip
-    saveUserToFirestore(displayUser).catch((err) =>
-      console.error("Error saving displayUser:", err)
-    );
+    saveUserToFirestore(displayUser);
   }, [displayUser, viewMode]);
 
-  // auto-save loggedInUser to Firestore
+  // Whenever loggedInUser changes, auto-save to Firestore (unless admin is viewing target)
   useEffect(() => {
     if (!loggedInUser) return;
     if (viewMode && viewingTarget) return; // skip if admin is viewing target
-    saveUserToFirestore(loggedInUser).catch((err) =>
-      console.error("Error saving loggedInUser:", err)
-    );
+    saveUserToFirestore(loggedInUser);
   }, [loggedInUser, viewMode, viewingTarget]);
 
+  /** Return a local copy of the user from sync, or null if not found. */
   function getUserRecord(uname) {
     const norm = uname.trim().toLowerCase();
     const user = syncedUsers[norm];
     if (!user) return null;
-    // Copy user with defaults
+
+    // Return a copy with safe defaults
     return {
       ...user,
       timeBox: user.timeBox || {},
-      defaultStartHour: typeof user.defaultStartHour === "number" ? user.defaultStartHour : 7,
-      defaultEndHour: typeof user.defaultEndHour === "number" ? user.defaultEndHour : 23,
+      defaultStartHour: user.defaultStartHour ?? 7,
+      defaultEndHour: user.defaultEndHour ?? 23,
       defaultPreset: {
-        start:
-          typeof user.defaultStartHour === "number" ? user.defaultStartHour : 7,
-        end: typeof user.defaultEndHour === "number" ? user.defaultEndHour : 23,
+        start: user.defaultStartHour ?? 7,
+        end: user.defaultEndHour ?? 23,
       },
     };
   }
 
-  // Login
+  // Basic login
   function handleLogin() {
     if (!username) {
       setMessage("Please enter a username.");
@@ -770,17 +835,18 @@ export default function App() {
     }
     const record = getUserRecord(username);
     if (!record) {
-      setMessage("User not recognized.");
+      setMessage("User not recognized. Check spelling of the full name from your sheet.");
       return;
     }
     loadUserRecord(record, false);
   }
 
-  // Admin loads employee => read-only
+  // Admin: load an employee's agenda read-only
   function handleLoadEmployee() {
     if (!targetUser) return;
     let employeeRecord = getUserRecord(targetUser);
     if (!employeeRecord) {
+      // If not found in local synced list, create a brand-new user
       employeeRecord = {
         role: "employee",
         password: "",
@@ -796,7 +862,7 @@ export default function App() {
     setMessage(`Loaded agenda for ${targetUser}`);
   }
 
-  // back to admin’s own
+  // Admin: back to your own agenda
   function handleBackToMyAgenda() {
     setDisplayUser(loggedInUser);
     setViewingTarget(false);
@@ -806,7 +872,7 @@ export default function App() {
     setCategoryTree(cats);
   }
 
-  // ensure day data
+  // Guarantee we have day data for the displayed user
   function ensureDayData(u, ds) {
     if (!u.timeBox[ds]) {
       u.timeBox[ds] = {
@@ -825,22 +891,30 @@ export default function App() {
     ensureDayData(activeData, currentDateStr);
   }
   const dayObj = canViewAgenda ? activeData.timeBox[currentDateStr] : {};
-  const { startHour = 7, endHour = 23, priorities = [], brainDump = [], homeOffice = false } =
-    dayObj;
+  const {
+    startHour = 7,
+    endHour = 23,
+    priorities = [],
+    brainDump = [],
+    homeOffice = false,
+  } = dayObj;
 
-  // total incomplete
+  // Calculate incomplete tasks
   const totalIncomplete =
-    priorities.filter((p) => !p.completed).length + brainDump.filter((b) => !b.completed).length;
+    priorities.filter((p) => !p.completed).length +
+    brainDump.filter((b) => !b.completed).length;
 
-  // immutably update active user data
+  // Helper to safely update the active user object
   function updateActiveData(fn) {
     if (!activeData) return;
     if (viewingTarget) {
+      // read-only user is 'displayUser'
       const copy = { ...displayUser, timeBox: { ...displayUser.timeBox } };
       ensureDayData(copy, currentDateStr);
       fn(copy);
       setDisplayUser(copy);
     } else {
+      // normal user is 'loggedInUser'
       const copy = { ...loggedInUser, timeBox: { ...loggedInUser.timeBox } };
       ensureDayData(copy, currentDateStr);
       fn(copy);
@@ -848,7 +922,7 @@ export default function App() {
     }
   }
 
-  // confetti if all done
+  // Show confetti if all tasks completed
   useEffect(() => {
     if (!canViewAgenda) return;
     if (totalIncomplete === 0 && (priorities.length > 0 || brainDump.length > 0)) {
@@ -857,19 +931,18 @@ export default function App() {
         updateActiveData((draft) => {
           draft.timeBox[currentDateStr].confettiShown = true;
         });
-        setTimeout(() => {
-          setShowConfetti(false);
-        }, 4000);
+        setTimeout(() => setShowConfetti(false), 4000);
       }
     } else {
       setShowConfetti(false);
     }
   }, [canViewAgenda, totalIncomplete, priorities, brainDump, dayObj.confettiShown, currentDateStr]);
 
-  // repeat daily/weekly
+  // Auto-load repeated slots from previous day/week
   useEffect(() => {
     if (!canViewAgenda) return;
     if (viewMode) return; // skip if read-only
+
     updateActiveData((draft) => {
       const ds = currentDateStr;
       const today = draft.timeBox[ds];
@@ -888,13 +961,14 @@ export default function App() {
       slots.forEach(({ hour, minute }) => {
         const label = formatTime(hour, minute);
         const currentSlot = today.schedule[label] || {};
-        // attempt to copy daily from yesterday, weekly from last week
         if (!currentSlot.text) {
+          // daily?
           const ySlot = draft.timeBox[yStr]?.schedule?.[label];
           if (ySlot && ySlot.repeat === "daily" && ySlot.text) {
             today.schedule[label] = { ...ySlot };
             return;
           }
+          // weekly?
           const wSlot = draft.timeBox[wStr]?.schedule?.[label];
           if (wSlot && wSlot.repeat === "weekly" && wSlot.text) {
             today.schedule[label] = { ...wSlot };
@@ -905,7 +979,7 @@ export default function App() {
     });
   }, [canViewAgenda, currentDateStr, currentDate, viewMode]);
 
-  // admin filter employees
+  // Admin: filter employees by area
   let filteredEmployees = [];
   if (isAdmin && loggedInUser.allowedAreas) {
     const allowed = loggedInUser.allowedAreas;
@@ -1019,11 +1093,11 @@ export default function App() {
     return new Date(y, m - 1, d);
   }
   function getAllDates() {
-    return activeData && activeData.timeBox ? Object.keys(activeData.timeBox) : [];
+    return activeData?.timeBox ? Object.keys(activeData.timeBox) : [];
   }
   function usageInSingleDay(dt) {
     const ds = formatDate(dt);
-    const day = activeData?.timeBox?.[ds];
+    const day = activeData?.timeBox[ds];
     if (!day) return { usageMap: {}, freeHours: 0, totalHours: 0 };
     const { startHour = 7, endHour = 23, schedule = {} } = day;
     let freeHours = 0;
@@ -1091,7 +1165,7 @@ export default function App() {
   const usageResult = computeReportData();
   const { usageMap, freeHours, totalHours } = usageResult;
 
-  // 2) Home Office bar => count how many days were marked homeOffice
+  // For home office chart
   let homeOfficeDays = 0;
   let nonHomeOfficeDays = 0;
   if (canViewAgenda && activeData?.timeBox) {
@@ -1103,7 +1177,7 @@ export default function App() {
     });
   }
 
-  // build schedule slots
+  // Build schedule rows
   const quarterSlots = canViewAgenda ? getQuarterHourSlots(startHour, endHour) : [];
 
   return (
@@ -1112,7 +1186,6 @@ export default function App() {
         <Confetti width={window.innerWidth} height={window.innerHeight} />
       )}
 
-      {/* If we are showing the full-screen reports modal */}
       {showReports && isAdmin && (
         <ReportsModal
           usageMap={usageMap}
@@ -1129,6 +1202,7 @@ export default function App() {
       {/* LEFT COLUMN */}
       <div className="left-column">
         <div className="logo">The Time Box</div>
+
         <div className="login-section">
           <label>Username:</label>
           <input
@@ -1136,7 +1210,7 @@ export default function App() {
             value={username}
             disabled={isLoggedIn}
             onChange={(e) => setUsername(e.target.value)}
-            placeholder="Username"
+            placeholder="Exact fullName from sheet"
           />
           <label>Password:</label>
           <input
@@ -1144,7 +1218,7 @@ export default function App() {
             value={password}
             disabled={isLoggedIn}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="Password"
+            placeholder="Employee Number"
           />
           {!isLoggedIn && (
             <button onClick={handleLogin} style={{ marginTop: 5 }}>
@@ -1152,6 +1226,7 @@ export default function App() {
             </button>
           )}
         </div>
+
         {message && <div style={{ color: "blue", marginTop: 6 }}>{message}</div>}
 
         {isLoggedIn && (
@@ -1235,7 +1310,6 @@ export default function App() {
           <div style={{ marginTop: 30 }}>
             {isAdmin && (
               <>
-                {/* A single button to open the full-screen modal */}
                 <button
                   className="reports-btn"
                   onClick={() => {
@@ -1320,7 +1394,7 @@ export default function App() {
         )}
       </div>
 
-      {/* RIGHT COLUMN: Schedule */}
+      {/* RIGHT COLUMN: Schedule Table */}
       <div className="right-column">
         {canViewAgenda && (
           <>
@@ -1330,6 +1404,7 @@ export default function App() {
               <button onClick={goPrevDay}>&lt;</button>
               <button onClick={goNextDay}>&gt;</button>
             </div>
+
             <div style={{ marginBottom: 10 }}>
               <input
                 type="checkbox"
@@ -1345,6 +1420,7 @@ export default function App() {
               />
               <label style={{ marginLeft: 5 }}>Mark Home Office</label>
             </div>
+
             <div style={{ marginBottom: 20 }}>
               <label style={{ marginRight: 10 }}>
                 Start Hour:
@@ -1377,6 +1453,7 @@ export default function App() {
                 </select>
               </label>
             </div>
+
             <table className="schedule-table">
               <thead>
                 <tr>
