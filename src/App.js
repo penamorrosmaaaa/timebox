@@ -4,7 +4,7 @@
  * merges the 'timeBox' without erasing
  * historical data on each login.
  ***************************************/
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Bar, Pie } from "react-chartjs-2";
 import Confetti from "react-confetti";
 import { FaEllipsisH } from "react-icons/fa";
@@ -872,8 +872,8 @@ export default function App() {
     setCategoryTree(cats);
   }
 
-  // Guarantee we have day data for the displayed user
-  function ensureDayData(u, ds) {
+  // Wrap ensureDayData in useCallback so it remains stable.
+  const ensureDayData = useCallback((u, ds) => {
     if (!u.timeBox[ds]) {
       u.timeBox[ds] = {
         startHour: u.defaultStartHour ?? 7,
@@ -885,27 +885,10 @@ export default function App() {
         confettiShown: false,
       };
     }
-  }
+  }, []);
 
-  if (canViewAgenda) {
-    ensureDayData(activeData, currentDateStr);
-  }
-  const dayObj = canViewAgenda ? activeData.timeBox[currentDateStr] : {};
-  const {
-    startHour = 7,
-    endHour = 23,
-    priorities = [],
-    brainDump = [],
-    homeOffice = false,
-  } = dayObj;
-
-  // Calculate incomplete tasks
-  const totalIncomplete =
-    priorities.filter((p) => !p.completed).length +
-    brainDump.filter((b) => !b.completed).length;
-
-  // Helper to safely update the active user object
-  function updateActiveData(fn) {
+  // Wrap updateActiveData in useCallback so its reference is stable
+  const updateActiveData = useCallback((fn) => {
     if (!activeData) return;
     if (viewingTarget) {
       // read-only user is 'displayUser'
@@ -920,7 +903,24 @@ export default function App() {
       fn(copy);
       setLoggedInUser(copy);
     }
+  }, [activeData, viewingTarget, displayUser, loggedInUser, currentDateStr, ensureDayData]);
+
+  if (canViewAgenda) {
+    updateActiveData((draft) => {}); // Ensure the day data exists
   }
+  const dayObj = canViewAgenda ? activeData.timeBox[currentDateStr] : {};
+  const {
+    startHour = 7,
+    endHour = 23,
+    priorities = [],
+    brainDump = [],
+    homeOffice = false,
+  } = dayObj;
+
+  // Calculate incomplete tasks
+  const totalIncomplete =
+    priorities.filter((p) => !p.completed).length +
+    brainDump.filter((b) => !b.completed).length;
 
   // Show confetti if all tasks completed
   useEffect(() => {
@@ -943,7 +943,7 @@ export default function App() {
     brainDump,
     dayObj.confettiShown,
     currentDateStr,
-    updateActiveData, // Added missing dependency
+    updateActiveData,
   ]);
 
   // Auto-load repeated slots from previous day/week
@@ -990,7 +990,7 @@ export default function App() {
     currentDateStr,
     currentDate,
     viewMode,
-    updateActiveData, // Added missing dependency
+    updateActiveData,
   ]);
 
   // Admin: filter employees by area
