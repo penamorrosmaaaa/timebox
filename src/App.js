@@ -32,7 +32,7 @@ import {
 
 // 2) Your Firebase config
 const firebaseConfig = {
-  apiKey: "AIzaSy---YOUR_KEY---",
+  apiKey: "AIzaSyCR9IO7GQatt5oU33OLxW-vDyEtiZ4Og4I",
   authDomain: "my-timebox-project.firebaseapp.com",
   projectId: "my-timebox-project",
   storageBucket: "my-timebox-project.appspot.com",
@@ -936,7 +936,15 @@ export default function App() {
     } else {
       setShowConfetti(false);
     }
-  }, [canViewAgenda, totalIncomplete, priorities, brainDump, dayObj.confettiShown, currentDateStr]);
+  }, [
+    canViewAgenda,
+    totalIncomplete,
+    priorities,
+    brainDump,
+    dayObj.confettiShown,
+    currentDateStr,
+    updateActiveData, // Added missing dependency
+  ]);
 
   // Auto-load repeated slots from previous day/week
   useEffect(() => {
@@ -977,7 +985,13 @@ export default function App() {
         }
       });
     });
-  }, [canViewAgenda, currentDateStr, currentDate, viewMode]);
+  }, [
+    canViewAgenda,
+    currentDateStr,
+    currentDate,
+    viewMode,
+    updateActiveData, // Added missing dependency
+  ]);
 
   // Admin: filter employees by area
   let filteredEmployees = [];
